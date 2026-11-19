@@ -2,4 +2,6 @@
 frames
 RAFT
 video
-serviceAccountKey.json
+static
+smartdrop.db
+__pycache__

@@ -1,161 +1,132 @@
-# Final\_demo
+# SmartDrop device software (Raspberry Pi)
 
-This repository demonstrates a complete project that integrates:
+Device firmware for the SmartDrop eye drop dispenser. On a button press it drives the
+stepper motor until the camera sees a drop, records the dispense on video, analyses the
+recording to count drops and estimate the drop trajectory angle, gives audio feedback,
+stores the result locally, and pushes it to the companion app.
 
-1. **Firebase Data Upload** – Upload processed data to Firebase using the Firebase Admin SDK.
-2. **RAFT-based Optical Flow Video Processing** – Process recorded video using the RAFT model for optical flow analysis.
-3. **Stepper Motor Control** – Drive a 28BYJ-48 stepper motor with a ULN2003 driver.
-4. **Main Application** – Wait for a button press to simultaneously record video and drive the stepper motor, then process the video and upload results to Firebase.
+**No cloud services are used.** The Pi itself serves the companion app over the local
+network and streams events to it (Server-Sent Events). Records live in a SQLite file on
+the device.
 
 ---
 
-## Repository Structure
+## Repository structure
 
 ```
-Final_demo/
-├── firebase_utils.py         # Firebase initialization and update functions
-├── raft_process.py           # RAFT model loading, video processing, and video recording functions using Picamera2
-├── stepper_motor.py          # Stepper motor control functions (move forward, move backward, stop, and cleanup)
-├── main.py                   # Main entry point: waits for a button press, drives motor, records video, processes video, uploads data
-├── RAFT/                     # The RAFT repository folder (clone from https://github.com/princeton-vl/RAFT.git)
-├── raft-things.pth           # Pretrained RAFT weights (download from https://github.com/princeton-vl/RAFT/releases/download/v1.0/raft-things.pth)
-└── serviceAccountKey.json    # Firebase service account key file
+accessible-eyedrop-RaspPi/
+├── main.py            # Entry point: button, motor, recording, analysis, feedback, app events
+├── local_server.py    # Flask server: serves the companion app and the /api endpoints
+├── store.py           # SQLite store for administration records (smartdrop.db)
+├── raft_process.py    # Video analysis (frame differencing in a region of interest)
+├── stepper_motor.py   # 28BYJ-48 / ULN2003 stepper control
+├── buzzer.py          # Success / fail melodies
+├── static/            # Built companion app (copied from the frontend's `out/` folder)
+├── RAFT/              # Optional: RAFT repository (imported by raft_process.py, see note)
+└── raft-things.pth    # Optional: RAFT weights (see note)
 ```
+
+**Note on RAFT.** `raft_process.py` imports and loads the RAFT optical-flow model, but the
+drop detection actually used is frame differencing; the optical-flow function is never
+called. The RAFT files are only needed because of that import. `one_drop.py` and
+`one_drop_greyScale.py` are earlier single-file prototypes and are not used by `main.py`.
 
 ---
 
 ## Dependencies
 
-### System Dependencies (Raspberry Pi 4B)
-
-- **Operating System:** Raspberry Pi OS Bullseye (or later)
-- **Camera:** Raspberry Pi Camera v2 connected to the CSI port
-  - **Enable:** Run `sudo raspi-config` → Interfacing Options → Camera.
-- **Button:** Connected to a GPIO pin (see Hardware Connections below)
-- **Stepper Motor & Driver:** 28BYJ-48 stepper motor with ULN2003 driver board
-- **FFmpeg:** Required for video encoding
-
-Install system packages via apt:
+### System (Raspberry Pi 4B, Raspberry Pi OS Bullseye or later)
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3-opencv ffmpeg python3-rpi.gpio
+sudo apt-get install -y python3-opencv ffmpeg python3-rpi.gpio python3-picamera2
 ```
 
-### Python Dependencies
-
-It is **highly recommended** to use a virtual environment.
-
-1. **Create and activate a virtual environment:**
-
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-2. **Install required Python packages:**
-
-   ```bash
-   pip install torch torchvision numpy imageio matplotlib tqdm tensorboardX picamera2
-   pip install "imageio[ffmpeg]"
-   ```
-
-**Note:**
-
-- Download the pretrained RAFT weights from [raft-things.pth](https://github.com/princeton-vl/RAFT/releases/download/v1.0/raft-things.pth) and place it in the repository root.
-- Place your Firebase service account key file as `serviceAccountKey.json` in the repository root.
-
----
-
-## Hardware Connections
-
-### Raspberry Pi Camera v2
-
-- Connect the Camera v2 to the CSI port on the Raspberry Pi 4B.
-- Enable the camera via `sudo raspi-config` under Interfacing Options.
-
-### Button
-
-- Connect one terminal of the button to **GPIO pin 4**.
-- Connect the other terminal to ground.
-- The code uses an internal pull-up resistor on GPIO 4.
-
-### Stepper Motor (28BYJ-48) and ULN2003 Driver
-
-- **Connections:**
-  - ULN2003 IN1 → GPIO 17
-  - ULN2003 IN2 → GPIO 18
-  - ULN2003 IN3 → GPIO 27
-  - ULN2003 IN4 → GPIO 22
-- Connect the ULN2003 board’s VCC to the 5V supply and GND to the Raspberry Pi ground.
-- **Note:** For this project, the motor’s specification is 2038 steps per revolution, and one full revolution moves the mechanism 2 mm. Thus, moving 2 mm forward requires issuing 2038 steps.
-
----
-
-## How to Run the Code
-
-### 1. Clone the RAFT Repository
-
-From the project root, run:
+### Python
 
 ```bash
-git clone https://github.com/princeton-vl/RAFT.git
-```
-
-Ensure the `RAFT` folder is in the same directory as `main.py`.
-
-### 2. Place Required Files
-
-- Place `raft-things.pth` (downloaded from the RAFT releases) in the repository root.
-- Place your Firebase service account key as `serviceAccountKey.json` in the repository root.
-
-### 3. Activate Your Virtual Environment
-
-```bash
+python3 -m venv --system-site-packages venv
 source venv/bin/activate
+pip install flask numpy imageio "imageio[ffmpeg]" torch torchvision
 ```
 
-### 4. Run the Main Program
-
-```bash
-python3 main.py
-```
+`torch`/`torchvision` are only required because of the RAFT import (see note above).
 
 ---
 
-## What the Program Does
+## Hardware connections
 
-1. **Waiting for a Button Press:**\
-   The program continuously waits for the button (on GPIO 4) to be pressed.
+- **Camera:** Raspberry Pi Camera v2 on the CSI port.
+- **Button:** one terminal to **GPIO 4**, the other to ground (internal pull-up is used).
+- **Buzzer:** GPIO 23.
+- **Stepper (28BYJ-48 via ULN2003):** IN1→GPIO 17, IN2→GPIO 18, IN3→GPIO 27, IN4→GPIO 22,
+  VCC→5V, GND→GND. 2038 steps ≈ one revolution ≈ 2 mm of plunger travel.
 
-2. **On Button Press:**
+---
 
-   - A separate thread starts recording video for 5 seconds using Picamera2. This records the process, including the motor’s movement.
-   - Simultaneously, the stepper motor is driven forward for one full revolution (2038 steps, moving 2 mm forward), and then the coils are de-energized.
-   - The system waits for 3 seconds.
-   - Then, the motor is driven backward for 2038 steps (2 mm backward) and stopped.
+## Running
 
-3. **Video Processing and Data Upload:**
+1. Build the companion app and copy it onto the device (see the frontend README), so that
+   `static/index.html` exists next to `main.py`.
+2. Start the firmware:
 
-   - After recording, the video is processed using the RAFT optical flow algorithm (in `raft_process.py`), and an annotated output video is saved.
-   - Processed data (e.g., drop count and angle) is uploaded to Firebase via the functions in `firebase_utils.py`.
+   ```bash
+   source venv/bin/activate
+   python3 main.py
+   ```
+
+3. On a phone on the same network (or the Pi's own hotspot), open
+   `http://<pi-address>:8000`. With mDNS enabled, `http://raspberrypi.local:8000` works.
+
+Without the `static/` folder the API still works; `/` returns a short message instead.
+
+### Laptop testing without hardware
+
+`local_server.py` and `store.py` have no hardware dependencies:
+
+```bash
+python3 local_server.py      # serves static/ and the API on http://localhost:8000
+```
+
+Call `local_server.record_attempt(drop_count, angle, success)` from the same process to
+emit a fake dispense event.
+
+---
+
+## What happens on a button press
+
+1. `status: dispensing` is pushed to the app. Video recording starts and the stepper
+   advances in 100-step increments until the live detector sees a drop in the region of
+   interest, then retracts the same number of steps.
+2. `status: processing` is pushed. The recording is analysed (`process_video`), giving a
+   drop count and the angle of the drop trajectory.
+3. The result is written to `smartdrop.db` and pushed to the app as a `record` event with
+   the eye the app currently has selected. `status: idle` follows.
+4. The buzzer plays the success melody if at least one drop was counted, otherwise the
+   fail melody.
+
+---
+
+## HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/` | The companion app |
+| GET | `/api/state` | `{user, medication, status, eye, records}` |
+| GET | `/api/records?limit=N` | Records, newest first (default 50, max 500) |
+| GET | `/api/events` | SSE stream. Events: `status` `{status, eye}` and `record` `{id, timestamp, eye, drop_count, angle, success}` |
+| POST | `/api/eye` | Body `{"eye": "left" \| "right"}`; sets the eye attached to the next records |
+
+`timestamp` is Unix seconds. `angle` is degrees or `null` when no drop was detected.
+`user` and `medication` are constants in `local_server.py`.
 
 ---
 
 ## Troubleshooting
 
-- **Camera Errors:**\
-  If you encounter camera initialization errors (e.g., "Camera **init** sequence did not complete"), ensure no other application is using the camera and that you properly close the camera (the code calls `picam2.close()` after recording).
-
-- **Stepper Motor Issues:**\
-  If the motor does not stop, ensure that `stop_motor()` is called after each movement and verify your wiring and GPIO assignments.
-
-- **Firebase Issues:**\
-  Ensure that your `serviceAccountKey.json` is correct and that your Firebase project is properly configured.
-
-- **General:**\
-  Double-check that all files are in the correct directories and that all dependencies are installed.
-
----
-
-
+- **Camera errors** (e.g. "Camera init sequence did not complete"): make sure no other
+  program is using the camera.
+- **Motor keeps running:** the motor loop only stops when the live detector reports a
+  drop. Check the camera view and the region of interest in `image_processing_thread`.
+- **Phone can't open the app:** confirm phone and Pi are on the same network and that
+  port 8000 is reachable (`curl http://<pi-address>:8000/api/state`).

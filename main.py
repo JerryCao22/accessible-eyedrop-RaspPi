@@ -9,6 +9,8 @@ import RPi.GPIO as GPIO
 from stepper_motor import move_forward, move_backward, cleanup as motor_cleanup
 from raft_process import process_video  # Using process_video from RAFT processing module
 from buzzer import play_melody
+# Local companion-app server (replaces Firebase): serves the UI and streams events to the phone
+from local_server import run_in_thread as start_app_server, set_status, record_attempt
 
 #############################################
 # Global variables and shared data
@@ -121,11 +123,15 @@ def main():
     proc_thread = threading.Thread(target=image_processing_thread, daemon=True)
     proc_thread.start()
 
+    # Serve the companion app on the local network (phone opens http://<pi-address>:8000)
+    start_app_server(port=8000)
+
     try:
         while True:
             # Wait for button press (active low)
             if GPIO.input(BUTTON_PIN) == GPIO.LOW:
                 print("Button pressed! Starting motor control and video recording.")
+                set_status("dispensing")
                 # Create a stop event for this recording session
                 record_stop_event = threading.Event()
                 rec_thread = threading.Thread(target=video_record_thread, kwargs={
@@ -159,15 +165,19 @@ def main():
                 rec_thread.join()
                 print("Video recording ended.")
 
-                # Process the recorded video using RAFT functions
+                # Process the recorded video (frame differencing in raft_process.py)
+                set_status("processing")
                 processed_data = process_video("captured.mp4", "outputcv.mp4")
                 print("Video processing result:", processed_data)
 
-                # Sound feedback (e.g., if drop_count > 0 then success, else fail)
-                if processed_data.get("drop_count", 0) > 0:
-                    play_melody("success")
-                else:
-                    play_melody("fail")
+                # Store the result locally and push it to the companion app
+                drop_count = processed_data.get("drop_count", 0)
+                success = drop_count > 0
+                record_attempt(drop_count, processed_data.get("angle"), success)
+                set_status("idle")
+
+                # Sound feedback
+                play_melody("success" if success else "fail")
 
                 # Wait until button is released to avoid repeated triggers
                 while GPIO.input(BUTTON_PIN) == GPIO.LOW:
