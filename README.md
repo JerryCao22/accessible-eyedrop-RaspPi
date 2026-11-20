@@ -22,13 +22,15 @@ accessible-eyedrop-RaspPi/
 ├── stepper_motor.py   # 28BYJ-48 / ULN2003 stepper control
 ├── buzzer.py          # Success / fail melodies
 ├── static/            # Built companion app (copied from the frontend's `out/` folder)
-├── RAFT/              # Optional: RAFT repository (imported by raft_process.py, see note)
-└── raft-things.pth    # Optional: RAFT weights (see note)
+├── captured.mp4, outputcv.mp4   # A sample recording and its analysed output (overwritten on each dispense)
+├── RAFT/              # Required: clone of the RAFT repository (git-ignored; imported by raft_process.py, see note)
+└── raft-things.pth    # Required: RAFT weights (loaded on every dispense, see note)
 ```
 
 **Note on RAFT.** `raft_process.py` imports and loads the RAFT optical-flow model, but the
 drop detection actually used is frame differencing; the optical-flow function is never
-called. The RAFT files are only needed because of that import. `one_drop.py` and
+called. The RAFT files are only needed because of that import, but without them `main.py`
+does not start: run `git clone https://github.com/princeton-vl/RAFT.git` in this folder. `one_drop.py` and
 `one_drop_greyScale.py` are earlier single-file prototypes and are not used by `main.py`.
 
 ---
@@ -68,7 +70,8 @@ pip install flask numpy imageio "imageio[ffmpeg]" torch torchvision
 
 1. Build the companion app and copy it onto the device (see the frontend README), so that
    `static/index.html` exists next to `main.py`.
-2. Start the firmware:
+2. Start the firmware from a desktop session (`main.py` always opens two OpenCV preview
+   windows, so it needs a display):
 
    ```bash
    source venv/bin/activate
